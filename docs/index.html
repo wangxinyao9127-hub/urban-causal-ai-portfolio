@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Privacy-safe portfolio demonstration using fully synthetic causal-chain and location data.">
+  <title>Urban Causal AI · Synthetic Portfolio Dashboard</title>
+  <link rel="stylesheet" href="assets/explorer.css">
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <div class="eyebrow">PUBLIC PORTFOLIO EDITION &middot; SYNTHETIC DATA ONLY</div>
+      <h1>Urban Causal AI Explorer</h1>
+      <p>Explore cause&ndash;outcome structures, divergence, convergence and fictional spatiotemporal patterns without distributing restricted research data.</p>
+    </div>
+    <div class="hero-meta">
+      <span>Synthetic cases <b>9,600</b></span>
+      <span>Synthetic explicit relations <b>8,000</b></span>
+      <span id="dataStatus" class="loading">Loading spatial records&hellip;</span>
+      <span>Fictional city &middot; reproducible seed</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="question-strip" aria-label="Research questions">
+      <div><span>01</span><b>Which causal chains dominate?</b><small>Ranked flows and the full causal network</small></div>
+      <div><span>02</span><b>Where do chains diverge or converge?</b><small>One cause to many outcomes; one outcome from many causes</small></div>
+      <div><span>03</span><b>When and where do they occur?</b><small>Linked monthly trend and report locations</small></div>
+    </section>
+
+    <section class="control-panel" aria-label="Dashboard filters">
+      <div class="control-group">
+        <label for="levelFilter">Causal level</label>
+        <select id="levelFilter">
+          <option value="2">Level 2 &middot; Full four-field relation</option>
+          <option value="1">Level 1 &middot; Cause to affected function</option>
+        </select>
+      </div>
+      <div class="control-group lens-control">
+        <label for="lensFilter">Analysis lens</label>
+        <select id="lensFilter">
+          <option value="all">All synthetic relations (n=8,000)</option>
+          <option value="infrastructure" selected>Infrastructure (n=6,000)</option>
+          <option value="transport">Transport &amp; public realm (n=2,700)</option>
+          <option value="drainage">Drainage &amp; water (n=1,300)</option>
+          <option value="lighting">Lighting &amp; traffic control (n=900)</option>
+          <option value="utilities">Utilities &amp; street assets (n=1,100)</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="subjectFilter">Cause subject</label>
+        <select id="subjectFilter"></select>
+      </div>
+      <div class="control-group">
+        <label for="targetFilter">Affected function</label>
+        <select id="targetFilter"></select>
+      </div>
+      <div class="control-group">
+        <label for="boroughFilter">Synthetic zone</label>
+        <select id="boroughFilter"></select>
+      </div>
+      <div class="control-group compact">
+        <label for="monthFilter">Activity month</label>
+        <select id="monthFilter"></select>
+      </div>
+      <div class="control-group compact">
+        <label for="topNFilter">Network size</label>
+        <select id="topNFilter">
+          <option value="15">Top 15 flows</option>
+          <option value="25" selected>Top 25 flows</option>
+          <option value="40">Top 40 flows</option>
+        </select>
+      </div>
+      <button id="resetButton" class="reset-button" type="button">Reset all</button>
+    </section>
+
+    <section class="summary-cards" id="summaryCards"></section>
+
+    <section class="panel network-panel" id="mainNetwork">
+      <div class="panel-header" id="networkHeader">
+        <div>
+          <div class="section-kicker">Question 1 &middot; Main causal chains</div>
+          <h2>Many-Cause and Many-Effect Causal Flow Network</h2>
+          <p>Switch between cause-first and impact-first reading. Line width represents report count; every selection updates the temporal and spatial views.</p>
+        </div>
+        <div class="selection-tools">
+          <label class="network-select" for="networkDirectionFilter"><span>Direction</span>
+            <select id="networkDirectionFilter">
+              <option value="cause">Cause-first</option>
+              <option value="impact">Impact-first</option>
+            </select>
+          </label>
+          <label class="network-select hidden" id="impactStateControl" for="impactStateFilter"><span>Resulting state</span>
+            <select id="impactStateFilter">
+              <option value="">All priority outcomes</option>
+              <option value="unsafe">Unsafe</option>
+              <option value="obstructed">Obstructed</option>
+              <option value="damaged">Damaged</option>
+              <option value="disrupted">Disrupted</option>
+              <option value="flooded">Flooded</option>
+            </select>
+          </label>
+          <span id="networkModeLabel"></span>
+          <button id="clearSelection" type="button">Clear selection</button>
+        </div>
+      </div>
+      <div class="interpretation" id="networkInterpretation"></div>
+      <div class="network-wrap">
+        <svg id="networkSvg" role="img" aria-label="Interactive causal flow network"></svg>
+      </div>
+      <div class="selection-summary" id="selectionSummary"></div>
+    </section>
+
+    <section class="panel matrix-panel">
+      <div class="panel-header">
+        <div>
+          <div class="section-kicker">New view &middot; Infrastructure cause&ndash;outcome structure</div>
+          <h2>Infrastructure Cause&ndash;Outcome Matrix</h2>
+          <p>Rows are infrastructure causes and columns are complete functional outcomes. Colour intensity shows the share within each cause; cell labels show exact report counts.</p>
+        </div>
+        <span class="table-note" id="matrixLensLabel"></span>
+      </div>
+      <div class="interpretation" id="matrixInterpretation"></div>
+      <div class="matrix-scroll" id="matrixContainer"></div>
+      <div class="matrix-note">Each row covers 100% of that cause: the eight leading outcomes are shown separately and all remaining outcomes are combined as “Other outcomes”. Non-zero shares below 1% are labelled “&lt;1%”. Click a named outcome cell to update every linked view.</div>
+    </section>
+
+    <section class="panel branching-panel">
+      <div class="panel-header">
+        <div>
+          <div class="section-kicker">Question 2 &middot; Divergence and convergence</div>
+          <h2>One-to-Many and Many-to-One Causal Structures</h2>
+          <p>Both views are recalculated from the active dashboard filters. Network selections automatically set the relevant focal cause or outcome.</p>
+        </div>
+      </div>
+      <div class="branch-grid">
+        <article class="branch-card">
+          <div class="branch-heading">
+            <div>
+              <h3>One Cause, Multiple Outcomes</h3>
+              <p>How one reported cause branches into different functional outcomes.</p>
+            </div>
+            <span class="structure-tag">Divergence</span>
+          </div>
+          <label for="causeFocus">Focal cause</label>
+          <select id="causeFocus"></select>
+          <div id="divergenceChart" class="branch-chart"></div>
+          <div id="divergenceNote" class="branch-note"></div>
+        </article>
+
+        <article class="branch-card">
+          <div class="branch-heading">
+            <div>
+              <h3>One Outcome, Multiple Causes</h3>
+              <p>How different reported causes converge on the same functional outcome.</p>
+            </div>
+            <span class="structure-tag gold">Convergence</span>
+          </div>
+          <label for="outcomeFocus">Focal outcome</label>
+          <select id="outcomeFocus"></select>
+          <div id="convergenceChart" class="branch-chart"></div>
+          <div id="convergenceNote" class="branch-note"></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel spatiotemporal-panel">
+      <div class="panel-header">
+        <div>
+          <div class="section-kicker">Question 3 &middot; Spatiotemporal patterns</div>
+          <h2>When and Where the Selected Causal Pattern Occurs</h2>
+          <p>The point map and monthly trend use the same filters and network selection. Points are deterministically sampled only for display performance.</p>
+        </div>
+      </div>
+      <div class="spatiotemporal-grid">
+        <article class="view-card map-panel">
+          <div class="view-card-header">
+            <div>
+              <h3>Spatial Distribution of Report Locations</h3>
+              <p>Click a fictional zone boundary to use it as a dashboard-wide filter.</p>
+            </div>
+            <div class="legend-inline">
+              <span><i class="legend-dot context"></i>Filtered context</span>
+              <span><i class="legend-dot selected"></i>Network selection</span>
+            </div>
+          </div>
+          <div class="map-wrap">
+            <svg id="mapSvg" role="img" aria-label="Interactive Synthetic City point-location map"></svg>
+            <div id="mapLoading" class="map-loading">Preparing spatial layer&hellip;</div>
+          </div>
+          <div class="map-pills" id="mapPills"></div>
+          <div class="interpretation compact-copy" id="mapInterpretation"></div>
+        </article>
+
+        <article class="view-card temporal-panel">
+          <div class="view-card-header">
+            <div>
+              <h3>Monthly Profile of the Selected Causal Pattern</h3>
+              <p>Monthly share within the filtered context and selected pattern; absolute counts remain available below and on hover.</p>
+            </div>
+          </div>
+          <div class="trend-wrap">
+            <svg id="trendSvg" role="img" aria-label="Monthly distribution of causal reports"></svg>
+          </div>
+          <div class="trend-metrics" id="trendMetrics"></div>
+          <div class="trend-legend" id="trendLegend"></div>
+          <div class="interpretation compact-copy" id="trendInterpretation"></div>
+          <div class="borough-ranking">
+            <h4>Leading synthetic zones in the current view</h4>
+            <div id="boroughBars"></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel table-panel">
+      <div class="panel-header">
+        <div>
+          <h2>Ranked Causal Chains</h2>
+          <p>Click a row to select the complete chain in the network, point map and monthly trend.</p>
+        </div>
+        <span class="table-note" id="tableNote"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Causal chain</th>
+              <th>Reports</th>
+              <th>Share of filtered relations</th>
+            </tr>
+          </thead>
+          <tbody id="chainsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="method-note">
+      <b>Interpretation:</b> Every case, count, coordinate and monthly pattern on this page is synthetic. The dashboard demonstrates analytical and product-design capabilities; it makes no claim about a real city, population or public authority.
+    </section>
+  </main>
+
+  <footer>
+    <span>Privacy-safe portfolio demo: no research-group data, report text, identifiers, images or real locations are included.</span>
+    <span>Generated reproducibly with synthetic seed 240731</span>
+  </footer>
+
+  <script src="assets/explorer.js" defer></script>
+</body>
+</html>

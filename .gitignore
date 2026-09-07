@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.gradio/
+
+# Never place private research files in this repository.
+*causal_predictions*.xlsx
+*causal_predictions*.csv
+*causal_predictions*.csv.gz
+*explorer_records_private*.json.gz
+*raw*.json
+*report_text*
+*original_image*
