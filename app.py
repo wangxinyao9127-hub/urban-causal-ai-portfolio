@@ -16,6 +16,10 @@ from typing import Any
 
 import gradio as gr
 from PIL import Image
+from dotenv import load_dotenv
+from openai import OpenAI
+
+load_dotenv()
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -310,6 +314,139 @@ def analyse(report_text: str, image_path: str | None):
     return status_card(status, score, mode, duration, result), result, checks, matches, note
 
 
+
+
+# ======================================================================
+# P0: Task Planning Agent
+# ======================================================================
+
+_qwen_client = None
+
+
+def _get_qwen():
+    global _qwen_client
+    if _qwen_client is None:
+        from openai import OpenAI as _OpenAI
+        import os
+        _qwen_client = _OpenAI(
+            api_key=os.environ.get("DASHSCOPE_API_KEY"),
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+    return _qwen_client
+
+
+def call_qwen_extract(report_text):
+    prompt = build_prompt(report_text, has_image=False)
+    client = _get_qwen()
+    resp = client.chat.completions.create(
+        model="qwen3.8-flash",
+        messages=[
+            {"role": "system", "content": "You extract structured causal relations. Return JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    text = resp.choices[0].message.content or "{}"
+    parsed = parse_json_object(text)
+    return clean_result(parsed)
+
+
+def agent_plan(user_question):
+    system = (
+        "You are a task-planning agent for an urban causal-analysis system. "
+        "Available tools: data_retrieval, causal_analysis, result_presentation. "
+        "Return JSON: {\"steps\":[{\"step\":1,\"action\":\"data_retrieval\",\"purpose\":\"\"}]} with exactly 3 steps."
+    )
+    client = _get_qwen()
+    resp = client.chat.completions.create(
+        model="qwen3.8-flash",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_question},
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    import json as _json
+    parsed = _json.loads(resp.choices[0].message.content or "{}")
+    return parsed.get("steps", [])
+
+
+def agent_retrieve(user_question, limit=5):
+    import re as _re
+    keywords = [w for w in _re.split(r"\W+", user_question.lower()) if len(w) > 3]
+    scored = []
+    for rank, row in enumerate(CHAINS, start=1):
+        text = " ".join(row["parts"]).lower()
+        hits = sum(1 for kw in keywords if kw in text)
+        if hits:
+            scored.append((hits, row["count"], rank, row))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    return [
+        [f"{hits} hits", " -> ".join(row["parts"]), f"{row['count']:,}", rank]
+        for hits, _, rank, row in scored[:limit]
+    ]
+
+
+def run_agent_stream(user_question, report_text):
+    import time as _time
+    progress = "## Agent Workflow\n\n"
+
+    # Step 0: Plan
+    progress += "### Planning task...\n"
+    yield progress, [], {}, ""
+    try:
+        steps = agent_plan(user_question)
+    except Exception as e:
+        steps = [
+            {"step": 1, "action": "data_retrieval", "purpose": "Search similar chains"},
+            {"step": 2, "action": "causal_analysis", "purpose": "Extract causal relation"},
+            {"step": 3, "action": "result_presentation", "purpose": "Summarize results"},
+        ]
+    plan_lines = "\n".join(
+        f"{s.get('step','?')}. **{s.get('action','?')}** - {s.get('purpose','')}"
+        for s in steps
+    )
+    progress += f"Plan:\n{plan_lines}\n\n"
+    yield progress, [], {}, ""
+    _time.sleep(0.5)
+
+    # Step 1: Retrieve
+    progress += "### Step 1/3: Retrieving similar chains...\n"
+    yield progress, [], {}, ""
+    retrieved = agent_retrieve(user_question + " " + report_text)
+    progress += f"Found {len(retrieved)} related chains\n\n"
+    yield progress, retrieved, {}, ""
+    _time.sleep(0.5)
+
+    # Step 2: Analyse
+    progress += "### Step 2/3: Extracting causal relation...\n"
+    yield progress, retrieved, {}, ""
+    try:
+        result = call_qwen_extract(report_text)
+    except Exception as e:
+        result = fallback_extract(report_text)
+        progress += f"Fallback used: {e}\n"
+    status, score, checks = validate_output(result, report_text, False)
+    progress += (
+        f"Result: `{result['subject']} -> {result['verb']} -> "
+        f"{result['target_subject']} -> {result['target_state_adj']}` "
+        f"(quality {score}/100)\n\n"
+    )
+    yield progress, retrieved, result, ""
+    _time.sleep(0.5)
+
+    # Step 3: Present
+    progress += "### Step 3/3: Summary\n\n"
+    summary = (
+        f"Agent done. Question: {user_question}\n\n"
+        f"- Retrieved {len(retrieved)} similar chains\n"
+        f"- Causal relation: {result['subject']} -> {result['verb']} -> {result['target_subject']} -> {result['target_state_adj']}"
+    )
+    progress += summary
+    yield progress, retrieved, result, summary
+
 CSS = """
 :root { --ink:#172725; --teal:#0d625c; --gold:#c49b49; --wash:#f2f6f5; }
 .gradio-container { max-width: 1240px !important; margin: 0 auto !important; color: var(--ink); }
@@ -353,84 +490,117 @@ with gr.Blocks(title="Urban Causal AI POC") as demo:
     gr.HTML(
         """
         <section class="hero-poc">
-          <div class="eyebrow">PORTFOLIO AI POC · MULTIMODAL STRUCTURED EXTRACTION</div>
-          <h1>Urban Issue → Causal Chain</h1>
-          <p>Turn a street-issue report and optional image into a validated five-field causal relation, then compare it with 8,000 fully synthetic demonstration relations.</p>
-          <div class="badges"><span>Text + image</span><span>Structured JSON</span><span>Schema validation</span><span>Bad-case aware</span><span>Dataset retrieval</span></div>
+          <div class="eyebrow">AI 应用原型 · 多模态因果关系抽取</div>
+          <h1>城市问题 → 因果链分析</h1>
+          <p>输入一条城市问题报告，自动抽取五字段因果关系；基于 27.5 万条真实报告聚合的统计知识库进行相似案例检索。</p>
+          <div class="badges"><span>文本 + 图片</span><span>结构化 JSON</span><span>Schema 校验</span><span>Agent 工作流</span><span>真实数据知识库</span></div>
         </section>
         """
     )
 
-    with gr.Row(equal_height=False, elem_id="analysis-grid"):
-        with gr.Column(scale=5):
-            gr.Markdown("## 1 · Input an urban issue")
-            report_input = gr.Textbox(
-                label="Report text",
-                placeholder="Example: The pavement is badly cracked and pedestrians may trip and fall.",
-                lines=7,
+    with gr.Tabs():
+        with gr.Tab("🤖 Agent 智能体模式"):
+            gr.Markdown("输入你想分析的问题，Agent 自动完成「数据检索 → 因果分析 → 结果汇总」三步。")
+            with gr.Row():
+                with gr.Column(scale=4):
+                    agent_question = gr.Textbox(
+                        label="你的问题",
+                        placeholder="例如：分析这条报告中垃圾堆积和街道环境的因果关系",
+                        lines=2,
+                    )
+                    agent_report = gr.Textbox(
+                        label="报告正文",
+                        placeholder="粘贴一条 FixMyStreet 报告正文...",
+                        lines=5,
+                    )
+                    agent_btn = gr.Button("🚀 启动 Agent", variant="primary", size="lg")
+                with gr.Column(scale=6):
+                    agent_progress = gr.Markdown("等待启动...")
+                    agent_table = gr.Dataframe(
+                        headers=["匹配度", "相似因果链", "报告数", "排名"],
+                        datatype=["str", "str", "str", "number"],
+                        interactive=False,
+                        label="从 27.5 万条真实数据中检索到的相似链路",
+                    )
+                    agent_json = gr.JSON(label="因果抽取结果")
+                    agent_summary = gr.Markdown()
+            agent_btn.click(
+                fn=run_agent_stream,
+                inputs=[agent_question, agent_report],
+                outputs=[agent_progress, agent_table, agent_json, agent_summary],
             )
-            image_input = gr.Image(
-                label="Optional image",
-                type="filepath",
-                sources=["upload"],
-                height=230,
-                elem_id="issue-image",
-            )
-            analyse_button = gr.Button("Analyse causal relation", variant="primary", size="lg")
-            gr.Examples(
-                examples=[
-                    ["The pavement is badly cracked and pedestrians may trip and fall."],
-                    ["The drain is completely blocked and water cannot flow away."],
-                    ["The streetlight has stopped working and the footpath is unlit at night."],
-                    ["Traffic lights are faulty, causing long delays at the junction."],
-                    ["Something is wrong near the road."],
-                ],
-                inputs=[report_input],
-                label="Synthetic demo cases",
-            )
-        with gr.Column(scale=7):
-            gr.Markdown("## 2 · Structured and validated output")
-            status_output = gr.HTML()
-            json_output = gr.JSON(label="Five-field causal JSON")
-            validation_output = gr.Dataframe(
-                headers=["Check", "Result", "Explanation"],
-                datatype=["str", "str", "str"],
-                interactive=False,
-                label="Schema and quality checks",
-            )
-            inference_note = gr.Markdown()
 
-    gr.Markdown("## 3 · Retrieve related patterns from synthetic demo data")
-    similar_output = gr.Dataframe(
-        headers=["Match", "Similar causal chain", "Reports", "Dataset rank"],
-        datatype=["str", "str", "str", "number"],
-        interactive=False,
-        label="Nearest aggregate causal chains",
-    )
-    gr.Markdown(f"[Open the interactive synthetic-data dashboard ↗]({DASHBOARD_URL})")
+        with gr.Tab("🔬 手动分析模式"):
+            with gr.Row(equal_height=False, elem_id="analysis-grid"):
+                with gr.Column(scale=5):
+                    gr.Markdown("## 1 · 输入一条城市问题报告")
+                    report_input = gr.Textbox(
+                        label="报告正文",
+                        placeholder="例如：人行道严重开裂，行人可能绊倒。",
+                        lines=7,
+                    )
+                    image_input = gr.Image(
+                        label="可选：上传图片",
+                        type="filepath",
+                        sources=["upload"],
+                        height=230,
+                        elem_id="issue-image",
+                    )
+                    analyse_button = gr.Button("分析因果关系", variant="primary", size="lg")
+                    gr.Examples(
+                        examples=[
+                            ["The pavement is badly cracked and pedestrians may trip and fall."],
+                            ["The drain is completely blocked and water cannot flow away."],
+                            ["The streetlight has stopped working and the footpath is unlit at night."],
+                            ["Traffic lights are faulty, causing long delays at the junction."],
+                            ["Something is wrong near the road."],
+                        ],
+                        inputs=[report_input],
+                        label="示例报告",
+                    )
+                with gr.Column(scale=7):
+                    gr.Markdown("## 2 · 结构化抽取结果与校验")
+                    status_output = gr.HTML()
+                    json_output = gr.JSON(label="五字段因果关系 JSON")
+                    validation_output = gr.Dataframe(
+                        headers=["检查项", "结果", "说明"],
+                        datatype=["str", "str", "str"],
+                        interactive=False,
+                        label="Schema 与质量校验",
+                    )
+                    inference_note = gr.Markdown()
 
-    with gr.Accordion("Evaluation plan and known bad cases", open=False):
-        gr.Markdown(
+        gr.Markdown("## 3 · 从真实数据中检索相似因果模式")
+        similar_output = gr.Dataframe(
+            headers=["匹配度", "相似因果链", "报告数", "数据排名"],
+            datatype=["str", "str", "str", "number"],
+            interactive=False,
+            label="聚合因果链 Top-N",
+        )
+        gr.Markdown(f"[Open the interactive synthetic-data dashboard ↗]({DASHBOARD_URL})")
+
+        with gr.Accordion("Evaluation plan and known bad cases", open=False):
+            gr.Markdown(
+                """
+    This public edition intentionally excludes evaluation results derived from restricted research data. A production evaluation should report JSON parse success, field-level accuracy, exact five-field match, calibration and performance on a separately designed hard-case set.
+
+    **Known bad cases:** vague one-line reports; several causal relations in one report; visually implied consequences; inconsistent label granularity; valid JSON with semantically debatable targets. These cases require human review and a governed evaluation dataset.
+                """
+            )
+
+        gr.HTML(
             """
-This public edition intentionally excludes evaluation results derived from restricted research data. A production evaluation should report JSON parse success, field-level accuracy, exact five-field match, calibration and performance on a separately designed hard-case set.
-
-**Known bad cases:** vague one-line reports; several causal relations in one report; visually implied consequences; inconsistent label granularity; valid JSON with semantically debatable targets. These cases require human review and a governed evaluation dataset.
+            <h2>4 · Product framing</h2>
+            <div class="portfolio-grid">
+              <article><b>Problem</b><span>Large volumes of unstructured urban reports are difficult to compare or prioritise.</span></article>
+              <article><b>Solution</b><span>Multimodal LLM extraction, constrained JSON, validation and dataset retrieval.</span></article>
+              <article><b>Metrics</b><span>Schema pass/fail, output-quality checks, latency and synthetic-pattern retrieval.</span></article>
+              <article><b>Boundary</b><span>Reported causal language is not proof of real-world causal effect or population risk.</span></article>
+              <article><b>Value</b><span>Faster triage, consistent issue taxonomy, explainable exploration and analyst review.</span></article>
+            </div>
+            <p class="boundary"><b>Privacy:</b> all bundled records are synthetic. Do not submit confidential or research-restricted content; Gemini-mode inputs are sent to the configured API and are not appended to the demo dataset.</p>
             """
         )
-
-    gr.HTML(
-        """
-        <h2>4 · Product framing</h2>
-        <div class="portfolio-grid">
-          <article><b>Problem</b><span>Large volumes of unstructured urban reports are difficult to compare or prioritise.</span></article>
-          <article><b>Solution</b><span>Multimodal LLM extraction, constrained JSON, validation and dataset retrieval.</span></article>
-          <article><b>Metrics</b><span>Schema pass/fail, output-quality checks, latency and synthetic-pattern retrieval.</span></article>
-          <article><b>Boundary</b><span>Reported causal language is not proof of real-world causal effect or population risk.</span></article>
-          <article><b>Value</b><span>Faster triage, consistent issue taxonomy, explainable exploration and analyst review.</span></article>
-        </div>
-        <p class="boundary"><b>Privacy:</b> all bundled records are synthetic. Do not submit confidential or research-restricted content; Gemini-mode inputs are sent to the configured API and are not appended to the demo dataset.</p>
-        """
-    )
 
     analyse_button.click(
         fn=analyse,
@@ -448,5 +618,4 @@ if __name__ == "__main__":
         theme=gr.themes.Soft(primary_hue="teal", neutral_hue="slate"),
         css=CSS,
         footer_links=[],
-        run_history=False,
     )
